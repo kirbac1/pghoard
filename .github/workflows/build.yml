@@ -29,13 +29,13 @@ jobs:
     steps:
 
       - id: checkout-code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           # Do not persist the token during execution of this job.
           persist-credentials: false
 
       - id: prepare-python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
@@ -92,10 +92,10 @@ jobs:
 
     steps:
       - id: checkout-code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - id: prepare-python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
