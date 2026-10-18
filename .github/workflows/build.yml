@@ -77,15 +77,15 @@ jobs:
         # Python-level behaviour doesn't change with the server version, and the server doesn't
         # change with the client's Python version.
         include:
-          - { python-version: "3.10", pg-version: "18", pytest-args: "" }
-          - { python-version: "3.11", pg-version: "18", pytest-args: "" }
-          - { python-version: "3.12", pg-version: "18", pytest-args: "" }
-          - { python-version: "3.12", pg-version: "13", pytest-args: '-m "needs_pg and not pg_version_independent"' }
-          - { python-version: "3.12", pg-version: "14", pytest-args: '-m "needs_pg and not pg_version_independent"' }
-          - { python-version: "3.12", pg-version: "15", pytest-args: '-m "needs_pg and not pg_version_independent"' }
-          - { python-version: "3.12", pg-version: "16", pytest-args: '-m "needs_pg and not pg_version_independent"' }
-          - { python-version: "3.12", pg-version: "17", pytest-args: '-m "needs_pg and not pg_version_independent"' }
-          - { python-version: "3.12", pg-version: "19", pytest-args: '-m "needs_pg and not pg_version_independent"' }
+          - { python-version: "3.10", pg-version: "18", tests: "" }
+          - { python-version: "3.11", pg-version: "18", tests: "" }
+          - { python-version: "3.12", pg-version: "18", tests: "" }
+          - { python-version: "3.12", pg-version: "13", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "14", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "15", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "16", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "17", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "19", tests: "needs_pg and not pg_version_independent" }
     name: test (py${{ matrix.python-version }}, pg${{ matrix.pg-version }})
     env:
       PG_VERSION: ${{ matrix.pg-version }}
@@ -121,13 +121,18 @@ jobs:
           pip install -e ".[dev]"
 
       - id: unittest
-        # The same command as `make coverage`, without its second pip install. -n auto: one
-        # pytest-xdist worker per CPU. Keep xdist's default distribution: some basebackup tests
-        # only pass in file order on their worker (see --dist worksteal). --timeout: fail a hung
-        # test instead of the whole job. --durations: list the slowest tests in every job.
-        run: >
-          python -m pytest -v -n auto --timeout=900 --durations=25 ${{ matrix.pytest-args }}
-          --cov-report term-missing --cov-report xml:coverage.xml --cov pghoard test/
+        # The same tests as `make coverage`, without its second pip install, in two passes:
+        # everything except tests marked serial on one pytest-xdist worker per CPU (-n auto), then
+        # the serial tests on their own. Keep xdist's default distribution: some basebackup tests
+        # only pass in file order on their worker. --timeout fails a hung test instead of the job;
+        # --durations lists the slowest tests.
+        env:
+          TESTS: ${{ matrix.tests }}
+        run: |
+          python -m pytest -v -n auto --timeout=900 --durations=25 -m "${TESTS:+($TESTS) and }not serial" \
+            --cov pghoard --cov-report= test/
+          python -m pytest -v --timeout=900 --durations=10 -m "${TESTS:+($TESTS) and }serial" \
+            --cov pghoard --cov-append --cov-report term-missing --cov-report xml:coverage.xml test/
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1

@@ -189,7 +189,10 @@ def setup_pg(pg_version: str) -> Iterator[PGTester]:
         config.update({
             "hot_standby": "on",
             "logging_collector": "off",
-            "max_wal_senders": 2,
+            # pg_receivewal, the walreceiver and pg_basebackup each take a WAL sender, and the server
+            # frees one only after the client process has gone: with 2, a test could start before the
+            # previous test's sender was released and fail with "exceeds max_wal_senders".
+            "max_wal_senders": 10,
             "wal_keep_segments": 100,
             "wal_level": "hot_standby",
             # disable fsync and synchronous_commit to speed up the tests a bit
@@ -228,6 +231,10 @@ def pytest_configure(config):
         "pg_version_independent: the result can't depend on the PostgreSQL version, so run it with one version only",
     )
     config.addinivalue_line("markers", "needs_pg: added automatically to tests parametrized by pg_version")
+    config.addinivalue_line(
+        "markers",
+        "serial: timing-sensitive under CPU load, so CI runs it in a separate pass without pytest-xdist",
+    )
 
 
 @pytest.hookimpl(tryfirst=True)
