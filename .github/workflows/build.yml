@@ -105,11 +105,13 @@ jobs:
         run: |
           # Remove preinstalled Postgres because this will conflict with the version we actually want.
           sudo apt-get remove -u postgresql\*
-          # Get the postgresql gpg key
-          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 7FCC7D46ACCC4CF8
+          # The PostgreSQL apt repository's signing key, fetched over HTTPS rather than from a
+          # keyserver (apt-key is deprecated, and keyserver lookups are a common flaky step).
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
 
           # Setup the Postgres repositories
-          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
           # Setup build deps, and only the PostgreSQL version this job tests
           sudo apt-get install -y libsnappy-dev postgresql-${{ matrix.pg-version }}
@@ -120,9 +122,11 @@ jobs:
 
       - id: unittest
         # The same command as `make coverage`, without its second pip install. -n auto: one
-        # pytest-xdist worker per CPU. --timeout: fail a hung test instead of the whole job.
+        # pytest-xdist worker per CPU; --dist worksteal: an idle worker takes queued tests from a
+        # busy one, so a few slow tests don't leave the others waiting. --timeout: fail a hung
+        # test instead of the whole job. --durations: list the slowest tests in every job.
         run: >
-          python -m pytest -v -n auto --timeout=900 ${{ matrix.pytest-args }}
+          python -m pytest -v -n auto --dist worksteal --timeout=900 --durations=25 ${{ matrix.pytest-args }}
           --cov-report term-missing --cov-report xml:coverage.xml --cov pghoard test/
 
       - id: upload-codecov
