@@ -113,6 +113,8 @@ jobs:
 
       - id: dependencies
         run: |
+          # man-db rebuilds its index after every package change (~10 s per job); CI never reads man pages.
+          sudo rm -f /var/lib/man-db/auto-update
           # Remove preinstalled Postgres because this will conflict with the version we actually want.
           sudo apt-get remove -u postgresql\*
           # The PostgreSQL apt repository's signing key, fetched over HTTPS rather than from a
