@@ -122,11 +122,11 @@ jobs:
 
       - id: unittest
         # The same command as `make coverage`, without its second pip install. -n auto: one
-        # pytest-xdist worker per CPU; --dist worksteal: an idle worker takes queued tests from a
-        # busy one, so a few slow tests don't leave the others waiting. --timeout: fail a hung
+        # pytest-xdist worker per CPU. Keep xdist's default distribution: some basebackup tests
+        # only pass in file order on their worker (see --dist worksteal). --timeout: fail a hung
         # test instead of the whole job. --durations: list the slowest tests in every job.
         run: >
-          python -m pytest -v -n auto --dist worksteal --timeout=900 --durations=25 ${{ matrix.pytest-args }}
+          python -m pytest -v -n auto --timeout=900 --durations=25 ${{ matrix.pytest-args }}
           --cov-report term-missing --cov-report xml:coverage.xml --cov pghoard test/
 
       - id: upload-codecov
