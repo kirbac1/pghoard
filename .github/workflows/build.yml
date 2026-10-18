@@ -129,7 +129,7 @@ jobs:
         env:
           TESTS: ${{ matrix.tests }}
         run: |
-          python -m pytest -v -n auto --timeout=900 --durations=25 -m "${TESTS:+($TESTS) and }not serial" \
+          python -m pytest -v -n auto --maxschedchunk=1 --timeout=900 --durations=25 -m "${TESTS:+($TESTS) and }not serial" \
             --cov pghoard --cov-report= test/
           python -m pytest -v --timeout=900 --durations=10 -m "${TESTS:+($TESTS) and }serial" \
             --cov pghoard --cov-append --cov-report term-missing --cov-report xml:coverage.xml test/
