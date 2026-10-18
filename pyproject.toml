@@ -119,7 +119,6 @@ constraints = [
     "pytest-mock==3.10.0",
     "pytest-timeout==2.1.0",
     "pytest-xdist==3.8.0",
-    "pytest-xdist==3.2.1",
     "python-dateutil==2.8.2",
     "python-snappy==0.7.1",
     "python-systemd==0.0.9",
