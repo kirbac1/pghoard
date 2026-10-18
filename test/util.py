@@ -17,7 +17,10 @@ else:
     _Fileobj = Any
 
 
-def wait_for_xlog(pghoard: PGHoardForTest, count: int):
+def wait_for_xlog(pghoard: PGHoardForTest, count: int, timeout: float = 60.0):
+    # Returns as soon as `count` uploads are recorded; the timeout only decides when to give up.
+    # Streaming, compressing and uploading three 16 MB segments took 11-19 s even in a serial run,
+    # so the former 15 s was missed whenever other tests ran in parallel.
     start = time.monotonic()
     while True:
         xlogs = None
@@ -28,7 +31,7 @@ def wait_for_xlog(pghoard: PGHoardForTest, count: int):
             if xlogs >= count:
                 break
 
-        if time.monotonic() - start > 15:
+        if time.monotonic() - start > timeout:
             assert False, "Expected at least {} xlog uploads, got {}".format(count, xlogs)
 
         time.sleep(0.1)
