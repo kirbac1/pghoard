@@ -98,8 +98,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
+
+      - id: prepare-uv
+        # Third-party action pinned to v10.3.0. Its cache keeps locally built wheels (systemd-python),
+        # so installing the Python dependencies takes seconds instead of ~15 s with pip.
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
 
       - id: dependencies
         run: |
@@ -113,12 +119,14 @@ jobs:
           # Setup the Postgres repositories
           sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
+          # The tests start their own servers: don't let the package create and start a "main" cluster.
+          sudo mkdir -p /etc/postgresql-common/createcluster.d
+          echo "create_main_cluster = false" | sudo tee /etc/postgresql-common/createcluster.d/no-main-cluster.conf
           # Setup build deps, and only the PostgreSQL version this job tests
-          sudo apt-get install -y libsnappy-dev postgresql-${{ matrix.pg-version }}
+          sudo apt-get install -y --no-install-recommends libsnappy-dev postgresql-${{ matrix.pg-version }}
           # Setup common python dependencies
-          python -m pip install --upgrade pip
-          pip install ".[constraints]"
-          pip install -e ".[dev]"
+          uv pip install --system ".[constraints]"
+          uv pip install --system -e ".[dev]"
 
       - id: unittest
         # The same tests as `make coverage`, without its second pip install, in two passes:
