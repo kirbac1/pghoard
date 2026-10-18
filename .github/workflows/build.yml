@@ -126,7 +126,7 @@ jobs:
         # only pass in file order on their worker (see --dist worksteal). --timeout: fail a hung
         # test instead of the whole job. --durations: list the slowest tests in every job.
         run: >
-          python -m pytest -v -n auto --timeout=900 --durations=25 ${{ matrix.pytest-args }}
+          python -m pytest -v -n 8 --timeout=900 --durations=25 ${{ matrix.pytest-args }}
           --cov-report term-missing --cov-report xml:coverage.xml --cov pghoard test/
 
       - id: upload-codecov
