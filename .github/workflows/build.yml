@@ -10,6 +10,12 @@ on:
     tags:
       - '**'
   pull_request:
+  workflow_dispatch:
+
+# A new push to a pull request makes its previous run pointless: cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
 
@@ -32,6 +38,8 @@ jobs:
         uses: actions/setup-python@v3
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - id: dependencies
         run: |
@@ -54,14 +62,33 @@ jobs:
           fi
 
   test:
+    # Runs alongside lint rather than after it: lint takes a minute or two, and a pull request
+    # needs both to pass anyway.
     runs-on: ubuntu-22.04
-    needs: lint
     # A hung test used to keep a run going until GitHub's 6-hour limit.
-    timeout-minutes: 60
+    timeout-minutes: 30
     strategy:
-      max-parallel: 5
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # Each Python version runs the whole suite against one PostgreSQL version, and each other
+        # PostgreSQL version runs only the tests parametrized by it, on one Python version. This
+        # covers every Python version and every PostgreSQL version without running the full
+        # Python x PostgreSQL product (3 x 7 suites), whose extra combinations add no coverage:
+        # Python-level behaviour doesn't change with the server version, and the server doesn't
+        # change with the client's Python version.
+        include:
+          - { python-version: "3.10", pg-version: "18", pytest-args: "" }
+          - { python-version: "3.11", pg-version: "18", pytest-args: "" }
+          - { python-version: "3.12", pg-version: "18", pytest-args: "" }
+          - { python-version: "3.12", pg-version: "13", pytest-args: '-m "needs_pg and not pg_version_independent"' }
+          - { python-version: "3.12", pg-version: "14", pytest-args: '-m "needs_pg and not pg_version_independent"' }
+          - { python-version: "3.12", pg-version: "15", pytest-args: '-m "needs_pg and not pg_version_independent"' }
+          - { python-version: "3.12", pg-version: "16", pytest-args: '-m "needs_pg and not pg_version_independent"' }
+          - { python-version: "3.12", pg-version: "17", pytest-args: '-m "needs_pg and not pg_version_independent"' }
+          - { python-version: "3.12", pg-version: "19", pytest-args: '-m "needs_pg and not pg_version_independent"' }
+    name: test (py${{ matrix.python-version }}, pg${{ matrix.pg-version }})
+    env:
+      PG_VERSION: ${{ matrix.pg-version }}
 
     steps:
       - id: checkout-code
@@ -71,6 +98,8 @@ jobs:
         uses: actions/setup-python@v3
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - id: dependencies
         run: |
@@ -78,21 +107,23 @@ jobs:
           sudo apt-get remove -u postgresql\*
           # Get the postgresql gpg key
           sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 7FCC7D46ACCC4CF8
-          
+
           # Setup the Postgres repositories
           sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
-          # Setup build deps
-          sudo apt-get install -y libsnappy-dev postgresql-13 postgresql-14 postgresql-15 postgresql-16 postgresql-17 postgresql-18 postgresql-19
+          # Setup build deps, and only the PostgreSQL version this job tests
+          sudo apt-get install -y libsnappy-dev postgresql-${{ matrix.pg-version }}
           # Setup common python dependencies
           python -m pip install --upgrade pip
-          pip install .
           pip install ".[constraints]"
-          pip install -e .
+          pip install -e ".[dev]"
 
       - id: unittest
-        # -n auto: one pytest-xdist worker per CPU. --timeout: fail a hung test instead of the job.
-        run: make coverage PYTEST_ARG="-v -n auto --timeout=900"
+        # The same command as `make coverage`, without its second pip install. -n auto: one
+        # pytest-xdist worker per CPU. --timeout: fail a hung test instead of the whole job.
+        run: >
+          python -m pytest -v -n auto --timeout=900 ${{ matrix.pytest-args }}
+          --cov-report term-missing --cov-report xml:coverage.xml --cov pghoard test/
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1

@@ -222,6 +222,39 @@ def get_versions() -> Sequence[str]:
     return env_version.split(",") if env_version else DEFAULT_PG_VERSIONS
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "pg_version_independent: the result can't depend on the PostgreSQL version, so run it with one version only",
+    )
+    config.addinivalue_line("markers", "needs_pg: added automatically to tests parametrized by pg_version")
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """Mark PostgreSQL tests, and run version-independent ones once rather than once per version.
+
+    Tests that take a PostgreSQL fixture are collected once per version in get_versions(). A test
+    marked pg_version_independent only talks to pghoard (for example its HTTP API with synthetic WAL
+    files), so the extra versions add time and no coverage: keep the first selected version only.
+    Runs before -m filtering, so `-m needs_pg` and `-m "not pg_version_independent"` work.
+    """
+    keep_version = get_versions()[0]
+    selected, deselected = [], []
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        version = callspec.params.get("pg_version") if callspec else None
+        if version is not None:
+            item.add_marker("needs_pg")
+            if item.get_closest_marker("pg_version_independent") and version != keep_version:
+                deselected.append(item)
+                continue
+        selected.append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+
+
 @pytest.fixture(scope="session", autouse=True, name="isolated_progress_file")
 def fixture_isolated_progress_file(tmp_path_factory) -> Iterator[None]:
     # pghoard keeps upload progress in PROGRESS_FILE, a path relative to the working directory.
