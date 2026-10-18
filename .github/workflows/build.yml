@@ -70,23 +70,27 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each Python version runs the whole suite against one PostgreSQL version, and each other
-        # PostgreSQL version runs only the tests parametrized by it, on one Python version. This
+        # Each Python version runs the whole suite against PostgreSQL 18, split into the tests that
+        # need a PostgreSQL server and those that don't, so the two halves run side by side. Each
+        # other PostgreSQL version runs only the tests parametrized by it, on Python 3.12. This
         # covers every Python version and every PostgreSQL version without running the full
         # Python x PostgreSQL product (3 x 7 suites), whose extra combinations add no coverage:
         # Python-level behaviour doesn't change with the server version, and the server doesn't
         # change with the client's Python version.
         include:
-          - { python-version: "3.10", pg-version: "18", tests: "" }
-          - { python-version: "3.11", pg-version: "18", tests: "" }
-          - { python-version: "3.12", pg-version: "18", tests: "" }
-          - { python-version: "3.12", pg-version: "13", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "14", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "15", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "16", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "17", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "19", tests: "needs_pg and not pg_version_independent" }
-    name: test (py${{ matrix.python-version }}, pg${{ matrix.pg-version }})
+          - { python-version: "3.10", pg-version: "18", part: "no server", tests: "not needs_pg" }
+          - { python-version: "3.10", pg-version: "18", part: "server", tests: "needs_pg" }
+          - { python-version: "3.11", pg-version: "18", part: "no server", tests: "not needs_pg" }
+          - { python-version: "3.11", pg-version: "18", part: "server", tests: "needs_pg" }
+          - { python-version: "3.12", pg-version: "18", part: "no server", tests: "not needs_pg" }
+          - { python-version: "3.12", pg-version: "18", part: "server", tests: "needs_pg" }
+          - { python-version: "3.12", pg-version: "13", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "14", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "15", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "16", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "17", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "19", part: "server", tests: "needs_pg and not pg_version_independent" }
+    name: test (py${{ matrix.python-version }}, pg${{ matrix.pg-version }}, ${{ matrix.part }})
     env:
       PG_VERSION: ${{ matrix.pg-version }}
 
@@ -139,8 +143,11 @@ jobs:
         run: |
           python -m pytest -v -n auto --timeout=900 --durations=25 -m "${TESTS:+($TESTS) and }not serial" \
             --cov pghoard --cov-report= test/
+          # Exit code 5 means no test was selected: a part without serial tests.
           python -m pytest -v --timeout=900 --durations=10 -m "${TESTS:+($TESTS) and }serial" \
-            --cov pghoard --cov-append --cov-report term-missing --cov-report xml:coverage.xml test/
+            --cov pghoard --cov-append --cov-report= test/ || [ $? -eq 5 ]
+          python -m coverage report --show-missing
+          python -m coverage xml -o coverage.xml
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1
