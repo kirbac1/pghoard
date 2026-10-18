@@ -115,8 +115,8 @@ jobs:
         run: |
           # man-db rebuilds its index after every package change (~10 s per job); CI never reads man pages.
           sudo rm -f /var/lib/man-db/auto-update
-          # Remove preinstalled Postgres because this will conflict with the version we actually want.
-          sudo apt-get remove -u postgresql\*
+          # The runner's preinstalled PostgreSQL 14 stays: removing it took ~20 s, and the tests and the
+          # pghoard fixtures run binaries from the tested version's own directory (pg_bin_directory).
           # The PostgreSQL apt repository's signing key, fetched over HTTPS rather than from a
           # keyserver (apt-key is deprecated, and keyserver lookups are a common flaky step).
           sudo install -d /usr/share/postgresql-common/pgdg
