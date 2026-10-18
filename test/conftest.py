@@ -289,6 +289,9 @@ def fixture_db(pg_version: str) -> Iterator[PGTester]:
             # ~2 MB
             cursor.execute("INSERT INTO test_table_2 (data) SELECT * FROM generate_series(1, 60000)")
             conn.commit()
+            # Write the new data out now. Otherwise the first pg_basebackup on this server waits for a
+            # spread checkpoint of it, which took ~45 s, while an explicit CHECKPOINT takes milliseconds.
+            cursor.execute("CHECKPOINT")
         yield pg
 
 
