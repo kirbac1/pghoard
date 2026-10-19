@@ -181,8 +181,9 @@ class WALReceiver(PGHoardThread):
         self.buffer.seek(0, os.SEEK_END)
 
     def run_safe(self):
-        self._init_cursor()
         try:
+            # Inside the try, so a failed connection still closes the wake-up sockets below.
+            self._init_cursor()
             if self.replication_slot:
                 self.create_replication_slot()
             timeline = self.start_replication()

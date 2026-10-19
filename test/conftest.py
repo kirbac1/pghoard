@@ -47,20 +47,27 @@ def port_is_listening(hostname: str, port: int, timeout: float = 0.5) -> bool:
         return False
 
 
-@pytest.fixture(scope="session", name="get_available_port")
-def fixture_get_available_port() -> Callable[[], int]:
-    # Under pytest-xdist every worker scans its own share of 30000-39999, so two workers can't
-    # both find the same port free and race to bind it.
+def worker_port_range(first: int, count: int) -> range:
+    """This pytest-xdist worker's share of the ports [first, first + count).
+
+    Without xdist that is the whole range. With it, no two workers draw from the same ports, so they
+    can't both pick a free port and race to bind it.
+    """
     worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
     worker_index = int(worker[2:]) if worker[2:].isdigit() else 0
-    block = 10000 // max(1, int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1")))
-    first_free_port = 30000 + block * worker_index
-    last_port = first_free_port + block
+    size = count // max(1, int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1")))
+    return range(first + size * worker_index, first + size * (worker_index + 1))
+
+
+@pytest.fixture(scope="session", name="get_available_port")
+def fixture_get_available_port() -> Callable[[], int]:
+    ports = worker_port_range(30000, 10000)
+    first_free_port = ports.start
 
     def get_available_port():
         nonlocal first_free_port
         port = first_free_port
-        while port < last_port:
+        while port < ports.stop:
             if not port_is_listening("localhost", port):
                 first_free_port = port + 1
                 return port
@@ -463,7 +470,11 @@ def pghoard_base(
             "algorithm": compression,
         },
         "http_address": listen_http_address,
-        "http_port": random.randint(1024, 32000),
+        # Each xdist worker draws from its own share of 20000-29999, below Linux's ephemeral ports.
+        # With one shared range, two workers' webservers can pick the same port. That is the likely
+        # cause of a failure seen once: the fixture waited the full 30 s for its webserver, and the
+        # test then got HTTP 500 instead of 400, from a server that was listening but wasn't its own.
+        "http_port": random.choice(worker_port_range(20000, 10000)),
         "json_state_file_path": tmpdir.join("pghoard_state.json").strpath,
         "maintenance_mode_file": tmpdir.join("maintenance_mode_file").strpath,
         # Set process count to 1 to avoid launching subprocesses during basebackup tests.
