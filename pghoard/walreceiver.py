@@ -8,6 +8,7 @@ import datetime
 import logging
 import os
 import select
+import socket
 import threading
 import time
 from io import BytesIO
@@ -33,6 +34,11 @@ class WALReceiver(PGHoardThread):
     ):
         super().__init__()
         self.log = logging.getLogger("WALReceiver")
+        # The loop waits up to KEEPALIVE_INTERVAL in select() for replication data. Setting running to
+        # False writes to this socket pair, which is in the same select(), so stopping (directly or via
+        # PGHoard.quit()) takes effect at once instead of after the interval.
+        self._wakeup_receive, self._wakeup_send = socket.socketpair()
+        self._wakeup_send.setblocking(False)
         self.running = True
         self.config = config
         self.compression_queue = compression_queue
@@ -55,6 +61,18 @@ class WALReceiver(PGHoardThread):
             "WALReceiver initialized with replication_slot: %r, last_flushed_lsn: %r", self.replication_slot,
             last_flushed_lsn
         )
+
+    @property
+    def running(self) -> bool:
+        return self._running
+
+    @running.setter
+    def running(self, value: bool) -> None:
+        self._running = value
+        if not value:
+            # Closed after the thread finished, or already holding a wake-up byte: nothing to do.
+            with suppress(OSError):
+                self._wakeup_send.send(b"\0")
 
     def _init_cursor(self):
         self.conn = psycopg2.connect(self.dsn, connection_factory=PhysicalReplicationConnection)
@@ -163,8 +181,9 @@ class WALReceiver(PGHoardThread):
         self.buffer.seek(0, os.SEEK_END)
 
     def run_safe(self):
-        self._init_cursor()
         try:
+            # Inside the try, so a failed connection still closes the wake-up sockets below.
+            self._init_cursor()
             if self.replication_slot:
                 self.create_replication_slot()
             timeline = self.start_replication()
@@ -205,7 +224,12 @@ class WALReceiver(PGHoardThread):
                 if not msg:
                     timeout = KEEPALIVE_INTERVAL - (datetime.datetime.now() - self.c.io_timestamp).total_seconds()
                     with suppress(InterruptedError):
-                        if not any(select.select([self.c], [], [], max(0.0, timeout))):
+                        readable, _, _ = select.select([self.c, self._wakeup_receive], [], [], max(0.0, timeout))
+                        if self._wakeup_receive in readable:
+                            self._wakeup_receive.recv(1024)
+                        # No replication data: the wait timed out, or we were woken up to stop. Either way
+                        # do what the timeout always did, so stopping still ships an unfinished segment.
+                        if self.c not in readable:
                             self.c.send_feedback()  # timing out, send keepalive
                             # Don't leave unfinished segments waiting for more than the KEEPALIVE_INTERVAL
                             if self.buffer.tell() > 0:
@@ -215,6 +239,8 @@ class WALReceiver(PGHoardThread):
             self.process_completed_segments(block=True)
         finally:
             self.stop_replication()
+            self._wakeup_receive.close()
+            self._wakeup_send.close()
 
     def process_completed_segments(self, *, block=False):
         for wal_start, queue in self.callbacks.items():

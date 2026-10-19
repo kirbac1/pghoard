@@ -10,6 +10,12 @@ on:
     tags:
       - '**'
   pull_request:
+  workflow_dispatch:
+
+# A new push to a pull request makes its previous run pointless: cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
 
@@ -23,15 +29,17 @@ jobs:
     steps:
 
       - id: checkout-code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           # Do not persist the token during execution of this job.
           persist-credentials: false
 
       - id: prepare-python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - id: dependencies
         run: |
@@ -54,42 +62,90 @@ jobs:
           fi
 
   test:
+    # Runs alongside lint rather than after it: lint takes a minute or two, and a pull request
+    # needs both to pass anyway.
     runs-on: ubuntu-22.04
-    needs: lint
+    # A hung test used to keep a run going until GitHub's 6-hour limit.
+    timeout-minutes: 30
     strategy:
-      max-parallel: 5
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # Each Python version runs the whole suite against PostgreSQL 18, split into the tests that
+        # need a PostgreSQL server and those that don't, so the two halves run side by side. Each
+        # other PostgreSQL version runs only the tests parametrized by it, on Python 3.12. This
+        # covers every Python version and every PostgreSQL version without running the full
+        # Python x PostgreSQL product (3 x 7 suites). What that leaves untested is a bug that needs
+        # one particular Python version and one particular older server version together; pghoard
+        # talks to the server through libpq (psycopg2-binary) and the server's own binaries, so that
+        # is unlikely, and a scheduled run of the full product would catch it.
+        include:
+          - { python-version: "3.10", pg-version: "18", part: "no server", tests: "not needs_pg" }
+          - { python-version: "3.10", pg-version: "18", part: "server", tests: "needs_pg" }
+          - { python-version: "3.11", pg-version: "18", part: "no server", tests: "not needs_pg" }
+          - { python-version: "3.11", pg-version: "18", part: "server", tests: "needs_pg" }
+          - { python-version: "3.12", pg-version: "18", part: "no server", tests: "not needs_pg" }
+          - { python-version: "3.12", pg-version: "18", part: "server", tests: "needs_pg" }
+          - { python-version: "3.12", pg-version: "13", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "14", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "15", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "16", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "17", part: "server", tests: "needs_pg and not pg_version_independent" }
+          - { python-version: "3.12", pg-version: "19", part: "server", tests: "needs_pg and not pg_version_independent" }
+    name: test (py${{ matrix.python-version }}, pg${{ matrix.pg-version }}, ${{ matrix.part }})
+    env:
+      PG_VERSION: ${{ matrix.pg-version }}
 
     steps:
       - id: checkout-code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - id: prepare-python
-        uses: actions/setup-python@v3
+        uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+
+      - id: prepare-uv
+        # Third-party action pinned to v10.3.0. Its cache keeps locally built wheels (systemd-python),
+        # so installing the Python dependencies takes seconds instead of ~15 s with pip.
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          enable-cache: true
+          cache-dependency-glob: pyproject.toml
 
       - id: dependencies
         run: |
           # Remove preinstalled Postgres because this will conflict with the version we actually want.
           sudo apt-get remove -u postgresql\*
-          # Get the postgresql gpg key
-          sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 7FCC7D46ACCC4CF8
-          
+          # The PostgreSQL apt repository's signing key, fetched over HTTPS rather than from a
+          # keyserver (apt-key is deprecated, and keyserver lookups are a common flaky step).
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+
           # Setup the Postgres repositories
-          sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
+          sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
-          # Setup build deps
-          sudo apt-get install -y libsnappy-dev postgresql-13 postgresql-14 postgresql-15 postgresql-16 postgresql-17 postgresql-18 postgresql-19
+          # Setup build deps, and only the PostgreSQL version this job tests
+          sudo apt-get install -y libsnappy-dev postgresql-${{ matrix.pg-version }}
           # Setup common python dependencies
-          python -m pip install --upgrade pip
-          pip install .
-          pip install ".[constraints]"
-          pip install -e .
+          uv pip install --system ".[constraints]"
+          uv pip install --system -e ".[dev]"
 
       - id: unittest
-        run: make coverage
+        # The same tests as `make coverage`, without its second pip install, in two passes:
+        # everything except tests marked serial on one pytest-xdist worker per CPU (-n auto), then
+        # the serial tests on their own. Keep xdist's default distribution: some basebackup tests
+        # only pass in file order on their worker. --timeout fails a hung test instead of the job;
+        # --durations lists the slowest tests.
+        env:
+          TESTS: ${{ matrix.tests }}
+        run: |
+          python -m pytest -v -n auto --timeout=900 --durations=25 -m "${TESTS:+($TESTS) and }not serial" \
+            --cov pghoard --cov-report= test/
+          # Exit code 5 means no test was selected: a part without serial tests.
+          python -m pytest -v --timeout=900 --durations=10 -m "${TESTS:+($TESTS) and }serial" \
+            --cov pghoard --cov-append --cov-report= test/ || [ $? -eq 5 ]
+          python -m coverage report --show-missing
+          python -m coverage xml -o coverage.xml
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1
