@@ -56,8 +56,9 @@ def http_restore_with_userauth(pghoard_with_userauth):
 
 
 class TestWebServer:
-    # Tests marked pg_version_independent only use pghoard's HTTP API, with synthetic WAL files whose
-    # header is fixed (wal_header_for_file), so they run with one PostgreSQL version: see conftest.py.
+    # Tests marked pg_version_independent check pghoard's HTTP API with synthetic WAL files, whose
+    # header is the same for every server version (wal_header_for_file). The PostgreSQL server the
+    # fixture starts doesn't affect what they assert, so they run with one version: see conftest.py.
     @pytest.mark.pg_version_independent
     def test_requesting_status(self, pghoard):
         pghoard.write_backup_state_to_json_file()
@@ -284,10 +285,10 @@ class TestWebServer:
         pg_wal_dir = get_pg_wal_directory(pghoard.config["backup_sites"][pghoard.test_site])
         pg_wals = {f for f in os.listdir(pg_wal_dir) if wal.WAL_RE.match(f) and f > start_wal}
 
-        # Four switches guarantee three new segments after start_wal. A fourth file exists only if
-        # PostgreSQL already pre-allocated the next segment, which it does by recycling old segments
-        # at checkpoints: on a server that earlier tests have used, but not on a fresh one (and, for
-        # other reasons, not reliably on 17+). Expect the three that are guaranteed.
+        # Four switches write at least three new segments after start_wal. A fourth file is there only
+        # if PostgreSQL had already created the next segment, which it does by recycling old segments
+        # at checkpoints: on a server earlier tests have used, not on a fresh one (checked: a fresh 18
+        # gave exactly three). The check already allowed three on 17+.
         expected_min_wals = 3
         assert len(pg_wals) >= expected_min_wals
 

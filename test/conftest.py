@@ -49,12 +49,13 @@ def port_is_listening(hostname: str, port: int, timeout: float = 0.5) -> bool:
 
 @pytest.fixture(scope="session", name="get_available_port")
 def fixture_get_available_port() -> Callable[[], int]:
-    # Under pytest-xdist every worker gets its own block of 1000 ports, so two workers
-    # can't both find the same port free and race to bind it.
+    # Under pytest-xdist every worker scans its own share of 30000-39999, so two workers can't
+    # both find the same port free and race to bind it.
     worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
     worker_index = int(worker[2:]) if worker[2:].isdigit() else 0
-    first_free_port = 30000 + 1000 * (worker_index % 10)
-    last_port = first_free_port + 1000
+    block = 10000 // max(1, int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1")))
+    first_free_port = 30000 + block * worker_index
+    last_port = first_free_port + block
 
     def get_available_port():
         nonlocal first_free_port
@@ -189,9 +190,9 @@ def setup_pg(pg_version: str) -> Iterator[PGTester]:
         config.update({
             "hot_standby": "on",
             "logging_collector": "off",
-            # pg_receivewal, the walreceiver and pg_basebackup each take a WAL sender, and the server
-            # frees one only after the client process has gone: with 2, a test could start before the
-            # previous test's sender was released and fail with "exceeds max_wal_senders".
+            # pg_receivewal, the walreceiver and pg_basebackup each take a WAL sender. With 2, a test
+            # failed with "exceeds max_wal_senders" once tests ran in parallel, most likely because the
+            # previous test's sender hadn't been released yet when the next one started.
             "max_wal_senders": 10,
             "wal_keep_segments": 100,
             "wal_level": "hot_standby",
@@ -228,7 +229,7 @@ def get_versions() -> Sequence[str]:
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
-        "pg_version_independent: the result can't depend on the PostgreSQL version, so run it with one version only",
+        "pg_version_independent: the assertions don't depend on the PostgreSQL version, so run with one version only",
     )
     config.addinivalue_line("markers", "needs_pg: added automatically to tests parametrized by pg_version")
     config.addinivalue_line(
@@ -242,8 +243,9 @@ def pytest_collection_modifyitems(config, items):
     """Mark PostgreSQL tests, and run version-independent ones once rather than once per version.
 
     Tests that take a PostgreSQL fixture are collected once per version in get_versions(). A test
-    marked pg_version_independent only talks to pghoard (for example its HTTP API with synthetic WAL
-    files), so the extra versions add time and no coverage: keep the first selected version only.
+    marked pg_version_independent checks only pghoard's own behaviour (for example its HTTP API with
+    synthetic WAL files); the server its fixture starts doesn't affect what it asserts. Running it for
+    every version adds time, not coverage, so keep the first selected version only.
     Runs before -m filtering, so `-m needs_pg` and `-m "not pg_version_independent"` work.
     """
     keep_version = get_versions()[0]
