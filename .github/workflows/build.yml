@@ -74,9 +74,10 @@ jobs:
         # need a PostgreSQL server and those that don't, so the two halves run side by side. Each
         # other PostgreSQL version runs only the tests parametrized by it, on Python 3.12. This
         # covers every Python version and every PostgreSQL version without running the full
-        # Python x PostgreSQL product (3 x 7 suites), whose extra combinations add no coverage:
-        # Python-level behaviour doesn't change with the server version, and the server doesn't
-        # change with the client's Python version.
+        # Python x PostgreSQL product (3 x 7 suites). What that leaves untested is a bug that needs
+        # one particular Python version and one particular older server version together; pghoard
+        # talks to the server through libpq (psycopg2-binary) and the server's own binaries, so that
+        # is unlikely, and a scheduled run of the full product would catch it.
         include:
           - { python-version: "3.10", pg-version: "18", part: "no server", tests: "not needs_pg" }
           - { python-version: "3.10", pg-version: "18", part: "server", tests: "needs_pg" }
@@ -113,8 +114,6 @@ jobs:
 
       - id: dependencies
         run: |
-          # man-db rebuilds its index after every package change (~10 s per job); CI never reads man pages.
-          sudo rm -f /var/lib/man-db/auto-update
           # Remove preinstalled Postgres because this will conflict with the version we actually want.
           sudo apt-get remove -u postgresql\*
           # The PostgreSQL apt repository's signing key, fetched over HTTPS rather than from a
@@ -125,11 +124,8 @@ jobs:
           # Setup the Postgres repositories
           sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
-          # The tests start their own servers: don't let the package create and start a "main" cluster.
-          sudo mkdir -p /etc/postgresql-common/createcluster.d
-          echo "create_main_cluster = false" | sudo tee /etc/postgresql-common/createcluster.d/no-main-cluster.conf
           # Setup build deps, and only the PostgreSQL version this job tests
-          sudo apt-get install -y --no-install-recommends libsnappy-dev postgresql-${{ matrix.pg-version }}
+          sudo apt-get install -y libsnappy-dev postgresql-${{ matrix.pg-version }}
           # Setup common python dependencies
           uv pip install --system ".[constraints]"
           uv pip install --system -e ".[dev]"
