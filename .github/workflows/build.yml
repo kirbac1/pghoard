@@ -92,11 +92,11 @@ jobs:
       - id: unittest
         run: |
           fails=0
-          for i in 1 2 3 4 5; do
-            PG_VERSION=19 python -m pytest -q --timeout=900 test/basebackup test/test_pghoard.py -k "test_pause_on_disk_full or TestPGBaseBackup or TestPGHoardWithPG" 2>&1 | tee run.log | tail -4
-            if grep -q "FAILED.*test_pause_on_disk_full" run.log; then fails=$((fails+1)); echo "RESULT attempt $i FAILED disk_full"; else echo "RESULT attempt $i ok disk_full"; fi
+          for i in $(seq 1 15); do
+            PG_VERSION=19 python -m pytest -v --timeout=300 test/test_pghoard.py -k "test_auth_alert_files or test_pause_on_disk_full" 2>&1 | tee run.log | grep -E "PASSED|FAILED|passed|failed" | tail -3
+            if grep -qE "^FAILED.*test_pause_on_disk_full" run.log; then fails=$((fails+1)); echo "RESULT attempt $i FAILED"; elif grep -q "test_pause_on_disk_full.* PASSED" run.log; then echo "RESULT attempt $i ok"; else echo "RESULT attempt $i NOTRUN"; fi
           done
-          echo "RESULT disk_full failures: $fails of 5"
+          echo "RESULT failures: $fails of 15"
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1
