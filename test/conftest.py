@@ -254,8 +254,39 @@ def get_versions() -> Sequence[str]:
 def pytest_configure(config):
     config.addinivalue_line(
         "markers",
+        "pg_version_independent: the assertions don't depend on the PostgreSQL version, so run with one version only",
+    )
+    config.addinivalue_line("markers", "needs_pg: added automatically to tests parametrized by pg_version")
+    config.addinivalue_line(
+        "markers",
         "serial: timing-sensitive under CPU load, so CI runs it in a separate pass without pytest-xdist",
     )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """Mark PostgreSQL tests, and run version-independent ones once rather than once per version.
+
+    Tests that take a PostgreSQL fixture are collected once per version in get_versions(). A test
+    marked pg_version_independent checks only pghoard's own behaviour (for example its HTTP API with
+    synthetic WAL files); the server its fixture starts doesn't affect what it asserts. Running it for
+    every version adds time, not coverage, so keep the first selected version only.
+    Runs before -m filtering, so `-m needs_pg` and `-m "not pg_version_independent"` work.
+    """
+    keep_version = get_versions()[0]
+    selected, deselected = [], []
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        version = callspec.params.get("pg_version") if callspec else None
+        if version is not None:
+            item.add_marker("needs_pg")
+            if item.get_closest_marker("pg_version_independent") and version != keep_version:
+                deselected.append(item)
+                continue
+        selected.append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
 
 
 @pytest.fixture(scope="session", autouse=True, name="isolated_progress_file")
