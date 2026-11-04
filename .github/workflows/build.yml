@@ -56,6 +56,8 @@ jobs:
   test:
     runs-on: ubuntu-22.04
     needs: lint
+    # A hung test used to keep a run going until GitHub's 6-hour limit.
+    timeout-minutes: 60
     strategy:
       max-parallel: 5
       matrix:
@@ -89,7 +91,8 @@ jobs:
           pip install -e .
 
       - id: unittest
-        run: make coverage
+        # -n auto: one pytest-xdist worker per CPU. --timeout: fail a hung test instead of the job.
+        run: make coverage PYTEST_ARG="-v -n auto --timeout=900"
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1
