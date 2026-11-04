@@ -11,6 +11,11 @@ from pghoard.wal import get_current_lsn
 from .conftest import PGHoardForTest
 from .util import switch_wal, wait_for_xlog
 
+# With other tests running in parallel, test_walreceiver[*-foobar] failed in 3 of 6 CI runs:
+# after the walreceiver restarted, the compressor rejected a WAL file whose page header was zeros, so
+# nothing more was uploaded. These tests pass reliably when run on their own, so CI runs them serially.
+pytestmark = pytest.mark.serial
+
 
 def get_transfer_agent_upload_xlog_state(pghoard: PGHoardForTest):
     transfer_agent_state = pghoard.transfer_agent_state.get(pghoard.test_site)

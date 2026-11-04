@@ -47,14 +47,27 @@ def port_is_listening(hostname: str, port: int, timeout: float = 0.5) -> bool:
         return False
 
 
+def worker_port_range(first: int, count: int) -> range:
+    """This pytest-xdist worker's share of the ports [first, first + count).
+
+    Without xdist that is the whole range. With it, no two workers draw from the same ports, so they
+    can't both pick a free port and race to bind it.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    worker_index = int(worker[2:]) if worker[2:].isdigit() else 0
+    size = count // max(1, int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1")))
+    return range(first + size * worker_index, first + size * (worker_index + 1))
+
+
 @pytest.fixture(scope="session", name="get_available_port")
 def fixture_get_available_port() -> Callable[[], int]:
-    first_free_port = 30000
+    ports = worker_port_range(30000, 10000)
+    first_free_port = ports.start
 
     def get_available_port():
         nonlocal first_free_port
         port = first_free_port
-        while port < 40000:
+        while port < ports.stop:
             if not port_is_listening("localhost", port):
                 first_free_port = port + 1
                 return port
@@ -184,7 +197,10 @@ def setup_pg(pg_version: str) -> Iterator[PGTester]:
         config.update({
             "hot_standby": "on",
             "logging_collector": "off",
-            "max_wal_senders": 2,
+            # pg_receivewal, the walreceiver and pg_basebackup each take a WAL sender. With 2, a test
+            # failed with "exceeds max_wal_senders" once tests ran in parallel, most likely because the
+            # previous test's sender hadn't been released yet when the next one started.
+            "max_wal_senders": 10,
             "wal_keep_segments": 100,
             "wal_level": "hot_standby",
             # disable fsync and synchronous_commit to speed up the tests a bit
@@ -217,6 +233,54 @@ def get_versions() -> Sequence[str]:
     return env_version.split(",") if env_version else DEFAULT_PG_VERSIONS
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "pg_version_independent: the assertions don't depend on the PostgreSQL version, so run with one version only",
+    )
+    config.addinivalue_line("markers", "needs_pg: added automatically to tests parametrized by pg_version")
+    config.addinivalue_line(
+        "markers",
+        "serial: timing-sensitive under CPU load, so CI runs it in a separate pass without pytest-xdist",
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    """Mark PostgreSQL tests, and run version-independent ones once rather than once per version.
+
+    Tests that take a PostgreSQL fixture are collected once per version in get_versions(). A test
+    marked pg_version_independent checks only pghoard's own behaviour (for example its HTTP API with
+    synthetic WAL files); the server its fixture starts doesn't affect what it asserts. Running it for
+    every version adds time, not coverage, so keep the first selected version only.
+    Runs before -m filtering, so `-m needs_pg` and `-m "not pg_version_independent"` work.
+    """
+    keep_version = get_versions()[0]
+    selected, deselected = [], []
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        version = callspec.params.get("pg_version") if callspec else None
+        if version is not None:
+            item.add_marker("needs_pg")
+            if item.get_closest_marker("pg_version_independent") and version != keep_version:
+                deselected.append(item)
+                continue
+        selected.append(item)
+    if deselected:
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+
+
+@pytest.fixture(scope="session", autouse=True, name="isolated_progress_file")
+def fixture_isolated_progress_file(tmp_path_factory) -> Iterator[None]:
+    # pghoard keeps upload progress in PROGRESS_FILE, a path relative to the working directory.
+    # Give each pytest process its own file so pytest-xdist workers don't share one; within a
+    # process tests share it exactly as they did before. Tests that patch it themselves still can.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("pghoard.common.PROGRESS_FILE", str(tmp_path_factory.mktemp("progress") / "persisted_progress_file.json"))
+        yield
+
+
 @pytest.fixture(scope="session", name="pg_version", params=get_versions())
 def fixture_pg_version(request) -> str:
     return request.param
@@ -234,6 +298,9 @@ def fixture_db(pg_version: str) -> Iterator[PGTester]:
             # ~2 MB
             cursor.execute("INSERT INTO test_table_2 (data) SELECT * FROM generate_series(1, 60000)")
             conn.commit()
+            # Write the new data out now. Otherwise the first pg_basebackup on this server waits for a
+            # spread checkpoint of it, which took ~45 s, while an explicit CHECKPOINT takes milliseconds.
+            cursor.execute("CHECKPOINT")
         yield pg
 
 
@@ -403,7 +470,11 @@ def pghoard_base(
             "algorithm": compression,
         },
         "http_address": listen_http_address,
-        "http_port": random.randint(1024, 32000),
+        # Each xdist worker draws from its own share of 20000-29999, below Linux's ephemeral ports.
+        # With one shared range, two workers' webservers can pick the same port. That is the likely
+        # cause of a failure seen once: the fixture waited the full 30 s for its webserver, and the
+        # test then got HTTP 500 instead of 400, from a server that was listening but wasn't its own.
+        "http_port": random.choice(worker_port_range(20000, 10000)),
         "json_state_file_path": tmpdir.join("pghoard_state.json").strpath,
         "maintenance_mode_file": tmpdir.join("maintenance_mode_file").strpath,
         # Set process count to 1 to avoid launching subprocesses during basebackup tests.
