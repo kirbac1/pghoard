@@ -56,6 +56,8 @@ jobs:
   test:
     runs-on: ubuntu-22.04
     needs: lint
+    # A hung test used to keep a run going until GitHub's 6-hour limit.
+    timeout-minutes: 60
     strategy:
       max-parallel: 5
       matrix:
@@ -86,10 +88,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install .
           pip install ".[constraints]"
-          pip install -e .
+          pip install -e ".[dev]"
 
       - id: unittest
-        run: make coverage
+        # The same tests as `make coverage`, in two passes: everything except tests marked serial on one
+        # pytest-xdist worker per CPU (-n auto), then the serial tests on their own. Keep xdist's default
+        # distribution: some basebackup tests only pass in file order on their worker. --timeout fails a
+        # hung test instead of the job; --durations lists the slowest tests.
+        run: |
+          python -m pytest -v -n auto --timeout=900 --durations=25 -m "not serial" --cov pghoard --cov-report= test/
+          python -m pytest -v --timeout=900 --durations=10 -m serial --cov pghoard --cov-append --cov-report= test/
+          python -m coverage report --show-missing
+          python -m coverage xml -o coverage.xml
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1
