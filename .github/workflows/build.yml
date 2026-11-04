@@ -70,27 +70,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Each Python version runs the whole suite against PostgreSQL 18, split into the tests that
-        # need a PostgreSQL server and those that don't, so the two halves run side by side. Each
-        # other PostgreSQL version runs only the tests parametrized by it, on Python 3.12. This
-        # covers every Python version and every PostgreSQL version without running the full
-        # Python x PostgreSQL product (3 x 7 suites). What that leaves untested is a bug that needs
-        # one particular Python version and one particular older server version together; pghoard
-        # talks to the server through libpq (psycopg2-binary) and the server's own binaries, so that
-        # is unlikely, and a scheduled run of the full product would catch it.
+        # Every Python x PostgreSQL pair gets its own job, so nothing stops being tested: what used to
+        # run one after another in a job now runs side by side. The tests that don't need a server
+        # run once per Python version.
+        python-version: ["3.10", "3.11", "3.12"]
+        pg-version: ["13", "14", "15", "16", "17", "18", "19"]
+        part: ["server"]
+        tests: ["needs_pg"]
         include:
           - { python-version: "3.10", pg-version: "18", part: "no server", tests: "not needs_pg" }
-          - { python-version: "3.10", pg-version: "18", part: "server", tests: "needs_pg" }
           - { python-version: "3.11", pg-version: "18", part: "no server", tests: "not needs_pg" }
-          - { python-version: "3.11", pg-version: "18", part: "server", tests: "needs_pg" }
           - { python-version: "3.12", pg-version: "18", part: "no server", tests: "not needs_pg" }
-          - { python-version: "3.12", pg-version: "18", part: "server", tests: "needs_pg" }
-          - { python-version: "3.12", pg-version: "13", part: "server", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "14", part: "server", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "15", part: "server", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "16", part: "server", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "17", part: "server", tests: "needs_pg and not pg_version_independent" }
-          - { python-version: "3.12", pg-version: "19", part: "server", tests: "needs_pg and not pg_version_independent" }
     name: test (py${{ matrix.python-version }}, pg${{ matrix.pg-version }}, ${{ matrix.part }})
     env:
       PG_VERSION: ${{ matrix.pg-version }}
