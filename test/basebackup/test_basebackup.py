@@ -754,8 +754,10 @@ LABEL: pg_basebackup base backup
 
         # adjust basebackup interval to be slightly longer than what this
         # basebackup took and make sure it's not retriggered
-        # We save some buffer by using three times the backup_duration
-        backup_duration = max((time.monotonic() - backup_start), 10)
+        # We save some buffer by using three times the backup_duration. The floor keeps the interval
+        # well above how long a backup takes (about 2 s once the test database is checkpointed), while
+        # the sleep below, which waits out the interval, stays short.
+        backup_duration = max((time.monotonic() - backup_start), 5)
         site_config["basebackup_interval_hours"] = (backup_duration * 3) / 3600
         pghoard.handle_site(pghoard.test_site, site_config)
         assert pghoard.test_site not in pghoard.basebackups

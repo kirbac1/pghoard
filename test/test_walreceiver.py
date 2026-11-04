@@ -7,9 +7,15 @@ import psycopg2
 import pytest
 
 from pghoard.wal import get_current_lsn
+from pghoard.walreceiver import KEEPALIVE_INTERVAL
 
 from .conftest import PGHoardForTest
 from .util import switch_wal, wait_for_xlog
+
+# With other tests running in parallel, test_walreceiver[*-foobar] failed in 3 of 6 CI runs:
+# after the walreceiver restarted, the compressor rejected a WAL file whose page header was zeros, so
+# nothing more was uploaded. These tests pass reliably when run on their own, so CI runs them serially.
+pytestmark = pytest.mark.serial
 
 
 def get_transfer_agent_upload_xlog_state(pghoard: PGHoardForTest):
@@ -76,6 +82,17 @@ class TestWalReceiver:
         assert state.get("latest_filename") == previous_wal_name
 
     @pytest.mark.timeout(60)
+    def test_stopping_does_not_wait_for_the_keepalive_interval(self, pghoard_walreceiver):
+        pghoard = pghoard_walreceiver
+        node = pghoard.config["backup_sites"][pghoard.test_site]["nodes"][0]
+        pghoard.start_walreceiver(pghoard.test_site, node, None)
+        pghoard.walreceivers[pghoard.test_site].initial_lsn_available.wait()
+        # Give the loop time to run out of data and reach its wait for more.
+        time.sleep(2)
+        start = time.monotonic()
+        stop_walreceiver(pghoard)
+        assert time.monotonic() - start < KEEPALIVE_INTERVAL / 2
+
     def test_walreceiver_database_error(self, db, pghoard_walreceiver):
         """Verify that we can recover from a DatabaseError exception
         """
