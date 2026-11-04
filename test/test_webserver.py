@@ -56,6 +56,9 @@ def http_restore_with_userauth(pghoard_with_userauth):
 
 
 class TestWebServer:
+    # Tests marked pg_version_independent only use pghoard's HTTP API, with synthetic WAL files whose
+    # header is fixed (wal_header_for_file), so they run with one PostgreSQL version: see conftest.py.
+    @pytest.mark.pg_version_independent
     def test_requesting_status(self, pghoard):
         pghoard.write_backup_state_to_json_file()
         conn = HTTPConnection(host="127.0.0.1", port=pghoard.config["http_port"])
@@ -78,6 +81,7 @@ class TestWebServer:
         response = conn.getresponse()
         assert response.status == 501
 
+    @pytest.mark.pg_version_independent
     def test_requesting_metrics_disabled(self, pghoard):
         pghoard.write_backup_state_to_json_file()
         conn = HTTPConnection(host="127.0.0.1", port=pghoard.config["http_port"])
@@ -93,6 +97,7 @@ class TestWebServer:
         response = conn.getresponse()
         assert response.status == 400
 
+    @pytest.mark.pg_version_independent
     def test_requesting_metrics_enabled(self, pghoard_metrics):
         pghoard_metrics.write_backup_state_to_json_file()
         conn = HTTPConnection(host="127.0.0.1", port=pghoard_metrics.config["http_port"])
@@ -100,6 +105,7 @@ class TestWebServer:
         response = conn.getresponse()
         assert response.status == 200
 
+    @pytest.mark.pg_version_independent
     def test_list_empty_basebackups(self, pghoard, http_restore, capsys):  # pylint: disable=redefined-outer-name
         # List with direct HttpRestore access
         assert http_restore.list_basebackups() == []
@@ -161,6 +167,7 @@ class TestWebServer:
         assert "{} MB".format(int(backups[0].data["metadata"]["original-file-size"]) // (1024 ** 2)) in out
         assert backups[0].name in out
 
+    @pytest.mark.pg_version_independent
     def test_wal_fetch_optimization(self, pghoard):
         # inject fake WAL and timeline files for testing
         invalid_wal_name = "000000060000000000000001"
@@ -204,6 +211,7 @@ class TestWebServer:
         assert not os.path.exists(output_path)
         os.unlink(invalid_wal_path)
 
+    @pytest.mark.pg_version_independent
     def test_archiving(self, pghoard):
         store = pghoard.transfer_agents[0].get_object_storage(pghoard.test_site)
         # inject fake WAL and timeline files for testing
@@ -383,6 +391,7 @@ class TestWebServer:
         archived_timelines = set(list_archive("timeline"))
         assert list(archived_timelines) == ["00000002.history"]
 
+    @pytest.mark.pg_version_independent
     def test_archive_command_with_invalid_file(self, pghoard):
         # only WAL and timeline (.history) files can be archived
         bl_label = "000000010000000000000002.00000028.backup"
@@ -400,6 +409,7 @@ class TestWebServer:
         assert excinfo.value.exit_code == postgres_command.EXIT_ARCHIVE_FAIL
         assert not os.path.exists(backup_wal_path + ".x")
 
+    @pytest.mark.pg_version_independent
     def test_get_invalid(self, pghoard, tmpdir):
         ne_wal_seg = "0000FFFF0000000C000000FE"
         nonexistent_wal = "/{}/archive/{}".format(pghoard.test_site, ne_wal_seg)
@@ -469,6 +479,7 @@ class TestWebServer:
         status = conn.getresponse().status
         assert status == 409
 
+    @pytest.mark.pg_version_independent
     def test_put_invalid_timeline_fails(self, pghoard, tmpdir):
         wal_dir = get_pg_wal_directory(pghoard.config["backup_sites"][pghoard.test_site])
         symlink_timeline = os.path.join(str(wal_dir), "00000001.history")
@@ -480,6 +491,7 @@ class TestWebServer:
         status = conn.getresponse().status
         assert status == 404
 
+    @pytest.mark.pg_version_independent
     def test_get_invalid_retry(self, pghoard_no_mp):
         # inject a failure by making a static function fail
         failures = [0, ""]
@@ -532,6 +544,7 @@ class TestWebServer:
             for ta in pghoard.transfer_agents:
                 ta.site_transfers = {}
 
+    @pytest.mark.pg_version_independent
     def test_retry_fetches_remote(self, pghoard_no_mp):
         """First fetch request for file returns data from local disk, second from cloud object storage"""
         pghoard = pghoard_no_mp
@@ -609,6 +622,7 @@ class TestWebServer:
         with open(storage_name, "rb") as f:
             assert f.read() == on_disk_data
 
+    @pytest.mark.pg_version_independent
     def test_restore_command_retry(self, pghoard):
         failures = [0, ""]
         orig_http_request = postgres_command.http_request
@@ -666,6 +680,7 @@ class TestWebServer:
 
         postgres_command.http_request = orig_http_request
 
+    @pytest.mark.pg_version_independent
     def test_get_archived_file(self, pghoard):
         wal_seg_prev_tli = "00000001000000000000000F"
         wal_seg = "00000002000000000000000F"
@@ -716,6 +731,7 @@ class TestWebServer:
             restored_data = fp.read()
         assert content == restored_data
 
+    @pytest.mark.pg_version_independent
     def test_get_encrypted_archived_file(self, pghoard):
         wal_seg = "000000090000000000000010"
         content = wal_header_for_file(wal_seg)
@@ -747,6 +763,7 @@ class TestWebServer:
             restored_data = fp.read()
         assert content == restored_data
 
+    @pytest.mark.pg_version_independent
     def test_get_wal_from_different_sites(self, pghoard):
         """Test that WAL can be retrieved from old site when querying through new site.
 
@@ -788,6 +805,7 @@ class TestWebServer:
             restored_data = fp.read()
         assert content == restored_data
 
+    @pytest.mark.pg_version_independent
     def test_requesting_basebackup(self, pghoard):
         nonexistent_basebackup = "/{}/archive/basebackup".format(pghoard.test_site)
         conn = HTTPConnection(host="127.0.0.1", port=pghoard.config["http_port"])
@@ -796,6 +814,7 @@ class TestWebServer:
         assert status == 201
         assert pghoard.requested_basebackup_sites == {"test_requesting_basebackup"}
 
+    @pytest.mark.pg_version_independent
     def test_running_setter(self, pghoard):
         assert pghoard.webserver.running is True
         pghoard.webserver.running = True
@@ -805,6 +824,7 @@ class TestWebServer:
         pghoard.webserver.running = True
         assert pghoard.webserver.running is True
 
+    @pytest.mark.pg_version_independent
     def test_response_handler_exception(self, pghoard):
         conn = HTTPConnection(host="127.0.0.1", port=pghoard.config["http_port"])
         with mock.patch.object(
@@ -815,6 +835,7 @@ class TestWebServer:
             assert resp.status == 503
             assert resp.read() == b"server failure: Exception: just a test"
 
+    @pytest.mark.pg_version_independent
     def test_parse_request_path_too_short(self, pghoard):
         conn = HTTPConnection(host="127.0.0.1", port=pghoard.config["http_port"])
         conn.request("GET", "/foo")
@@ -822,6 +843,7 @@ class TestWebServer:
         assert resp.status == 400
         assert resp.read() == b"Invalid path ['foo']"
 
+    @pytest.mark.pg_version_independent
     def test_parse_request_invalid_path(self, pghoard):
         "/{}/archive/xlog".format(pghoard.test_site)
         conn = HTTPConnection(host="127.0.0.1", port=pghoard.config["http_port"])
@@ -830,6 +852,7 @@ class TestWebServer:
         assert resp.status == 400
         assert resp.read() == b"Invalid 'archive' request, only single file retrieval is supported for now"
 
+    @pytest.mark.pg_version_independent
     def test_uncontrolled_target_path(self, pghoard):
         wal_seg = "0000000100000001000000AB"
         wal_file = "/{}/archive/{}".format(pghoard.test_site, wal_seg)
@@ -849,6 +872,7 @@ class TestWebServer:
         status = conn.getresponse().status
         assert status == 400
 
+    @pytest.mark.pg_version_independent
     def test_requesting_status_with_user_authentiction(self, pghoard_with_userauth):
         pghoard_with_userauth.write_backup_state_to_json_file()
         conn = HTTPConnection(host="127.0.0.1", port=pghoard_with_userauth.config["http_port"])
