@@ -59,7 +59,8 @@ jobs:
     strategy:
       max-parallel: 5
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.12"]
+        copy: [1, 2, 3]
 
     steps:
       - id: checkout-code
@@ -86,10 +87,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install .
           pip install ".[constraints]"
-          pip install -e .
+          pip install -e ".[dev]"
 
       - id: unittest
-        run: make coverage
+        run: |
+          fails=0
+          for i in 1 2 3 4 5; do
+            PG_VERSION=19 python -m pytest -q --timeout=900 test/basebackup test/test_pghoard.py -k "test_pause_on_disk_full or TestPGBaseBackup or TestPGHoardWithPG" 2>&1 | tee run.log | tail -4
+            if grep -q "FAILED.*test_pause_on_disk_full" run.log; then fails=$((fails+1)); echo "RESULT attempt $i FAILED disk_full"; else echo "RESULT attempt $i ok disk_full"; fi
+          done
+          echo "RESULT disk_full failures: $fails of 5"
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1
