@@ -5,10 +5,11 @@ Copyright (c) 2015 Ohmu Ltd
 See LICENSE for details
 """
 import contextlib
+import functools
+import itertools
 import json
 import lzma
 import os
-import random
 import re
 import signal
 import socket
@@ -47,14 +48,44 @@ def port_is_listening(hostname: str, port: int, timeout: float = 0.5) -> bool:
         return False
 
 
+def worker_port_range(first: int, count: int) -> range:
+    """This pytest-xdist worker's share of the ports [first, first + count).
+
+    Without xdist that is the whole range. With it, no two workers draw from the same ports, so they
+    can't both pick a free port and race to bind it.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "gw0")
+    worker_index = int(worker[2:]) if worker[2:].isdigit() else 0
+    size = count // max(1, int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", "1")))
+    return range(first + size * worker_index, first + size * (worker_index + 1))
+
+
+@functools.lru_cache(maxsize=1)
+def http_ports() -> Iterator[int]:
+    """Webserver ports for this process: its own share of 20000-29999, below Linux's ephemeral ports.
+
+    WebServer.close() stops serving but leaves the socket listening, so a later pghoard in this process
+    that draws the same port can't bind it, and its requests hang against the old socket. So never hand
+    out a port twice.
+    """
+    return itertools.cycle(worker_port_range(20000, 10000))
+
+
+def next_http_port() -> int:
+    return next(http_ports())
+
+
 @pytest.fixture(scope="session", name="get_available_port")
 def fixture_get_available_port() -> Callable[[], int]:
-    first_free_port = 30000
+    # Below Linux's ephemeral ports (32768 and up). There, a client's outgoing socket can already hold a
+    # port without listening on it, so port_is_listening() misses it and the bind fails.
+    ports = worker_port_range(10000, 10000)
+    first_free_port = ports.start
 
     def get_available_port():
         nonlocal first_free_port
         port = first_free_port
-        while port < 40000:
+        while port < ports.stop:
             if not port_is_listening("localhost", port):
                 first_free_port = port + 1
                 return port
@@ -184,7 +215,10 @@ def setup_pg(pg_version: str) -> Iterator[PGTester]:
         config.update({
             "hot_standby": "on",
             "logging_collector": "off",
-            "max_wal_senders": 2,
+            # pg_receivewal, the walreceiver and pg_basebackup each take a WAL sender. With 2, a test
+            # failed with "exceeds max_wal_senders" once tests ran in parallel, most likely because the
+            # previous test's sender hadn't been released yet when the next one started.
+            "max_wal_senders": 10,
             "wal_keep_segments": 100,
             "wal_level": "hot_standby",
             # disable fsync and synchronous_commit to speed up the tests a bit
@@ -217,6 +251,36 @@ def get_versions() -> Sequence[str]:
     return env_version.split(",") if env_version else DEFAULT_PG_VERSIONS
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "needs_pg: added automatically to tests parametrized by pg_version")
+    config.addinivalue_line(
+        "markers",
+        "serial: timing-sensitive under CPU load, so CI runs it in a separate pass without pytest-xdist",
+    )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items):
+    """Mark the tests that take a PostgreSQL fixture, so that CI can run them apart from the others.
+
+    Runs before -m filtering, so `-m needs_pg` works.
+    """
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        if callspec and callspec.params.get("pg_version") is not None:
+            item.add_marker("needs_pg")
+
+
+@pytest.fixture(scope="session", autouse=True, name="isolated_progress_file")
+def fixture_isolated_progress_file(tmp_path_factory) -> Iterator[None]:
+    # pghoard keeps upload progress in PROGRESS_FILE, a path relative to the working directory.
+    # Give each pytest process its own file so pytest-xdist workers don't share one; within a
+    # process tests share it exactly as they did before. Tests that patch it themselves still can.
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr("pghoard.common.PROGRESS_FILE", str(tmp_path_factory.mktemp("progress") / "persisted_progress_file.json"))
+        yield
+
+
 @pytest.fixture(scope="session", name="pg_version", params=get_versions())
 def fixture_pg_version(request) -> str:
     return request.param
@@ -234,6 +298,9 @@ def fixture_db(pg_version: str) -> Iterator[PGTester]:
             # ~2 MB
             cursor.execute("INSERT INTO test_table_2 (data) SELECT * FROM generate_series(1, 60000)")
             conn.commit()
+            # Write the new data out now. Otherwise the first pg_basebackup on this server waits for a
+            # spread checkpoint of it, which took ~45 s, while an explicit CHECKPOINT takes milliseconds.
+            cursor.execute("CHECKPOINT")
         yield pg
 
 
@@ -403,7 +470,7 @@ def pghoard_base(
             "algorithm": compression,
         },
         "http_address": listen_http_address,
-        "http_port": random.randint(1024, 32000),
+        "http_port": next_http_port(),
         "json_state_file_path": tmpdir.join("pghoard_state.json").strpath,
         "maintenance_mode_file": tmpdir.join("maintenance_mode_file").strpath,
         # Set process count to 1 to avoid launching subprocesses during basebackup tests.
