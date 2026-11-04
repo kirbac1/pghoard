@@ -57,10 +57,10 @@ jobs:
     runs-on: ubuntu-22.04
     needs: lint
     strategy:
-      max-parallel: 5
+      fail-fast: false
       matrix:
         python-version: ["3.12"]
-        copy: [1, 2, 3]
+        copy: [1, 2, 3, 4]
 
     steps:
       - id: checkout-code
@@ -90,13 +90,7 @@ jobs:
           pip install -e ".[dev]"
 
       - id: unittest
-        run: |
-          fails=0
-          for i in $(seq 1 15); do
-            PG_VERSION=19 python -m pytest -v --timeout=300 test/test_pghoard.py -k "test_auth_alert_files or test_pause_on_disk_full" 2>&1 | tee run.log | grep -E "PASSED|FAILED|passed|failed" | tail -3
-            if grep -qE "^FAILED.*test_pause_on_disk_full" run.log; then fails=$((fails+1)); echo "RESULT attempt $i FAILED"; elif grep -q "test_pause_on_disk_full.* PASSED" run.log; then echo "RESULT attempt $i ok"; else echo "RESULT attempt $i NOTRUN"; fi
-          done
-          echo "RESULT failures: $fails of 15"
+        run: make coverage
 
       - id: upload-codecov
         # Third-party action pinned to v3.1.1
