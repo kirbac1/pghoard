@@ -11,6 +11,11 @@ on:
       - '**'
   pull_request:
 
+# A new push to a pull request makes its previous run pointless: cancel it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
 
   lint:
@@ -54,14 +59,27 @@ jobs:
           fi
 
   test:
+    # Runs alongside lint rather than after it: a pull request needs both to pass anyway.
     runs-on: ubuntu-22.04
-    needs: lint
     # A hung test used to keep a run going until GitHub's 6-hour limit.
-    timeout-minutes: 60
+    timeout-minutes: 30
     strategy:
-      max-parallel: 5
+      fail-fast: false
       matrix:
+        # Every Python and PostgreSQL pair gets its own job, so what used to run one version after
+        # another in a job now runs side by side, and nothing stops being tested. The tests that don't
+        # need a server run once per Python version.
         python-version: ["3.10", "3.11", "3.12"]
+        pg-version: ["13", "14", "15", "16", "17", "18", "19"]
+        part: ["server"]
+        tests: ["needs_pg"]
+        include:
+          - { python-version: "3.10", pg-version: "18", part: "no server", tests: "not needs_pg" }
+          - { python-version: "3.11", pg-version: "18", part: "no server", tests: "not needs_pg" }
+          - { python-version: "3.12", pg-version: "18", part: "no server", tests: "not needs_pg" }
+    name: test (py${{ matrix.python-version }}, pg${{ matrix.pg-version }}, ${{ matrix.part }})
+    env:
+      PG_VERSION: ${{ matrix.pg-version }}
 
     steps:
       - id: checkout-code
@@ -82,8 +100,8 @@ jobs:
           # Setup the Postgres repositories
           sudo sh -c 'echo "deb http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main 19" > /etc/apt/sources.list.d/pgdg.list'
           sudo apt-get update
-          # Setup build deps
-          sudo apt-get install -y libsnappy-dev postgresql-13 postgresql-14 postgresql-15 postgresql-16 postgresql-17 postgresql-18 postgresql-19
+          # Setup build deps, and only the PostgreSQL version this job tests
+          sudo apt-get install -y libsnappy-dev postgresql-${{ matrix.pg-version }}
           # Setup common python dependencies
           python -m pip install --upgrade pip
           pip install .
@@ -95,9 +113,12 @@ jobs:
         # pytest-xdist worker per CPU (-n auto), then the serial tests on their own. Keep xdist's default
         # distribution: some basebackup tests only pass in file order on their worker. --timeout fails a
         # hung test instead of the job; --durations lists the slowest tests.
+        env:
+          TESTS: ${{ matrix.tests }}
         run: |
-          python -m pytest -v -n auto --timeout=900 --durations=25 -m "not serial" --cov pghoard --cov-report= test/
-          python -m pytest -v --timeout=900 --durations=10 -m serial --cov pghoard --cov-append --cov-report= test/
+          python -m pytest -v -n auto --timeout=900 --durations=25 -m "($TESTS) and not serial" --cov pghoard --cov-report= test/
+          # Exit code 5 means no test was selected: a part without serial tests.
+          python -m pytest -v --timeout=900 --durations=10 -m "($TESTS) and serial" --cov pghoard --cov-append --cov-report= test/ || [ $? -eq 5 ]
           python -m coverage report --show-missing
           python -m coverage xml -o coverage.xml
 

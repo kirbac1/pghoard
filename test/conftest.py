@@ -252,10 +252,23 @@ def get_versions() -> Sequence[str]:
 
 
 def pytest_configure(config):
+    config.addinivalue_line("markers", "needs_pg: added automatically to tests parametrized by pg_version")
     config.addinivalue_line(
         "markers",
         "serial: timing-sensitive under CPU load, so CI runs it in a separate pass without pytest-xdist",
     )
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items):
+    """Mark the tests that take a PostgreSQL fixture, so that CI can run them apart from the others.
+
+    Runs before -m filtering, so `-m needs_pg` works.
+    """
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        if callspec and callspec.params.get("pg_version") is not None:
+            item.add_marker("needs_pg")
 
 
 @pytest.fixture(scope="session", autouse=True, name="isolated_progress_file")
