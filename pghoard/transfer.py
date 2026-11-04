@@ -126,7 +126,11 @@ class UploadEventProgressTracker(PGHoardThread):
         self.metrics = metrics
         self.log = logging.getLogger("UploadEventProgressTracker")
 
-        self.running: bool = False
+        # Set while the tracker is stopped. The loop waits on it instead of sleeping, so
+        # stop() and PGHoard.quit() (which sets running = False and then joins this thread)
+        # wake it at once rather than after up to CHECK_FREQUENCY seconds.
+        self._stopped = threading.Event()
+        self.running = False
 
         self._tracked_events: Dict[str, UploadEventProgress] = {}
         self._tracked_events_lock = threading.Lock()
@@ -136,6 +140,17 @@ class UploadEventProgressTracker(PGHoardThread):
         self.wal_sequence_uploaded_until: Dict[str, str] = {}
         self._uploaded_future_wals: Dict[str, Dict[int, str]] = {}
         super().__init__()
+
+    @property
+    def running(self) -> bool:
+        return not self._stopped.is_set()
+
+    @running.setter
+    def running(self, value: bool) -> None:
+        if value:
+            self._stopped.clear()
+        else:
+            self._stopped.set()
 
     def track_upload_event(self, file_key: str, file_type: FileType, file_size: Optional[int]) -> None:
         with self._tracked_events_lock:
@@ -221,7 +236,7 @@ class UploadEventProgressTracker(PGHoardThread):
                 with self._tracked_events_lock:
                     self._check_increment_rate()
 
-                time.sleep(self.CHECK_FREQUENCY)
+                self._stopped.wait(self.CHECK_FREQUENCY)
         except Exception:  # pylint: disable=broad-except
             self.log.exception("Failed to update transfer rate %s", "pghoard.compressed_file_upload")
             self.metrics.increase("pghoard.transfer_operation_errors")
