@@ -437,6 +437,19 @@ class TestTransferAgent(PGHoardTestCase):
         assert self.upload_tracker.get_wal_sequence_uploaded_until() == {}
 
 
+class TestUploadEventProgressTrackerStop:
+    def test_stopping_does_not_wait_for_the_next_check(self):
+        tracker = UploadEventProgressTracker(metrics=metrics.Metrics(statsd={}))
+        tracker.CHECK_FREQUENCY = 60.0
+        tracker.start()
+        while not tracker.running:
+            time.sleep(0.01)
+        # What PGHoard.quit() does
+        tracker.running = False
+        tracker.join(timeout=5)
+        assert not tracker.is_alive()
+
+
 class TestUploadEventProgressTrackerWalSequence:
     """Unit tests for UploadEventProgressTracker.update_wal_sequence in isolation."""
     def setup_method(self, method):  # pylint: disable=unused-argument
