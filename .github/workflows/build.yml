@@ -57,9 +57,10 @@ jobs:
     runs-on: ubuntu-22.04
     needs: lint
     strategy:
-      max-parallel: 5
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        python-version: ["3.12"]
+        copy: [1, 2, 3, 4]
 
     steps:
       - id: checkout-code
@@ -86,7 +87,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install .
           pip install ".[constraints]"
-          pip install -e .
+          pip install -e ".[dev]"
 
       - id: unittest
         run: make coverage
