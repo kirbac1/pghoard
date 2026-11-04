@@ -57,9 +57,11 @@ jobs:
     runs-on: ubuntu-22.04
     needs: lint
     strategy:
-      max-parallel: 5
       matrix:
         python-version: ["3.10", "3.11", "3.12"]
+        pg-version: ["13", "14", "15", "16", "17", "18", "19"]
+    env:
+      PG_VERSION: ${{ matrix.pg-version }}
 
     steps:
       - id: checkout-code
