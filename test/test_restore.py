@@ -371,7 +371,9 @@ class TestBasebackupFetcher(unittest.TestCase):
 
     def real_processing_with_threading_retries_on_timeout(self, fetcher, restore_dir, max_fails):
         fail_counter = [0]
-        base_max_stale_seconds = 2
+        # The stall check polls once a second, and the failing fetcher below sleeps longer than every
+        # (doubling) limit, so 1 s exercises the same retries as 2 s did in half the time.
+        base_max_stale_seconds = 1
 
         class FailingChunkFetcher(ChunkFetcher):
             def _fetch_and_extract_one_backup(self, metadata, file_size, fetch_fn):
