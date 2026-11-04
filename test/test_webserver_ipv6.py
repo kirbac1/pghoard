@@ -7,7 +7,11 @@ See LICENSE for details
 import json
 from http.client import HTTPConnection
 
+import pytest
 from pytest import raises
+
+# Which addresses pghoard's HTTP server binds to doesn't depend on the PostgreSQL version.
+pytestmark = pytest.mark.pg_version_independent
 
 
 class TestIPV6WebServer:
